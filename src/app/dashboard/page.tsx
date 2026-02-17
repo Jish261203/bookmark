@@ -11,6 +11,9 @@ import {
   Bookmark as BookmarkIcon,
   Globe,
   Loader2,
+  Edit,
+  Check,
+  X,
 } from "lucide-react";
 import toast from "react-hot-toast";
 
@@ -27,6 +30,10 @@ export default function Dashboard() {
   const [title, setTitle] = useState("");
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(true);
+  const [bookmarksLoading, setBookmarksLoading] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editUrl, setEditUrl] = useState("");
   const router = useRouter();
 
   useEffect(() => {
@@ -41,13 +48,24 @@ export default function Dashboard() {
       }
       setUser(user);
 
+      // Load from localStorage first for instant UI
+      const cached = localStorage.getItem(`bookmarks_${user.id}`);
+      if (cached) {
+        setBookmarks(JSON.parse(cached));
+      }
+
+      setBookmarksLoading(true);
       const { data } = await supabase
         .from("bookmarks")
         .select("*")
         .eq("user_id", user.id)
         .order("created_at", { ascending: false });
 
-      if (data) setBookmarks(data);
+      if (data) {
+        setBookmarks(data);
+        localStorage.setItem(`bookmarks_${user.id}`, JSON.stringify(data));
+      }
+      setBookmarksLoading(false);
       setLoading(false);
     };
 
@@ -59,7 +77,7 @@ export default function Dashboard() {
 
     // Create realtime subscription after user is loaded
     const channel = supabase
-      .channel("realtime-bookmarks")
+      .channel(`realtime-bookmarks-${user.id}`)
       .on(
         "postgres_changes",
         {
@@ -72,12 +90,35 @@ export default function Dashboard() {
           if (payload.eventType === "INSERT") {
             const newEntry = payload.new as Bookmark;
             setBookmarks((prev) => {
-              // Check if bookmark already exists (to avoid duplicates from optimistic update)
-              if (prev.find((b) => b.id === newEntry.id)) return prev;
-              return [newEntry, ...prev];
+              const updated = prev.find((b) => b.id === newEntry.id)
+                ? prev
+                : [newEntry, ...prev];
+              localStorage.setItem(
+                `bookmarks_${user.id}`,
+                JSON.stringify(updated),
+              );
+              return updated;
             });
           } else if (payload.eventType === "DELETE") {
-            setBookmarks((prev) => prev.filter((b) => b.id !== payload.old.id));
+            setBookmarks((prev) => {
+              const updated = prev.filter((b) => b.id !== payload.old.id);
+              localStorage.setItem(
+                `bookmarks_${user.id}`,
+                JSON.stringify(updated),
+              );
+              return updated;
+            });
+          } else if (payload.eventType === "UPDATE") {
+            setBookmarks((prev) => {
+              const updated = prev.map((b) =>
+                b.id === payload.new.id ? (payload.new as Bookmark) : b,
+              );
+              localStorage.setItem(
+                `bookmarks_${user.id}`,
+                JSON.stringify(updated),
+              );
+              return updated;
+            });
           }
         },
       )
@@ -139,7 +180,11 @@ export default function Dashboard() {
       toast.error("Failed to sync with database");
       setBookmarks((prev) => prev.filter((b) => b.id !== tempId));
     } else {
-      setBookmarks((prev) => prev.map((b) => (b.id === tempId ? data : b)));
+      setBookmarks((prev) => {
+        const updated = prev.map((b) => (b.id === tempId ? data : b));
+        localStorage.setItem(`bookmarks_${user.id}`, JSON.stringify(updated));
+        return updated;
+      });
       toast.success("Saved!");
     }
   };
@@ -160,6 +205,53 @@ export default function Dashboard() {
       setBookmarks(originalBookmarks); // Rollback
     } else {
       toast.success("Removed");
+      localStorage.setItem(`bookmarks_${user.id}`, JSON.stringify(bookmarks));
+    }
+  };
+
+  const startEdit = (bookmark: Bookmark) => {
+    setEditingId(bookmark.id);
+    setEditTitle(bookmark.title);
+    setEditUrl(bookmark.url);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditTitle("");
+    setEditUrl("");
+  };
+
+  const updateBookmark = async (id: string) => {
+    if (!editTitle.trim() || !editUrl.trim())
+      return toast.error("Please fill in all fields");
+
+    const formattedUrl = editUrl.trim().startsWith("http")
+      ? editUrl.trim()
+      : `https://${editUrl.trim()}`;
+
+    // Optimistic Update
+    const originalBookmarks = [...bookmarks];
+    setBookmarks((prev) =>
+      prev.map((b) =>
+        b.id === id ? { ...b, title: editTitle.trim(), url: formattedUrl } : b,
+      ),
+    );
+
+    const { error } = await supabase
+      .from("bookmarks")
+      .update({ title: editTitle.trim(), url: formattedUrl })
+      .eq("id", id)
+      .eq("user_id", user.id);
+
+    if (error) {
+      toast.error("Failed to update");
+      setBookmarks(originalBookmarks); // Rollback
+    } else {
+      toast.success("Updated!");
+      localStorage.setItem(`bookmarks_${user.id}`, JSON.stringify(bookmarks));
+      setEditingId(null);
+      setEditTitle("");
+      setEditUrl("");
     }
   };
 
@@ -230,7 +322,15 @@ export default function Dashboard() {
           </div>
 
           <div className="grid gap-4">
-            {bookmarks.length === 0 ? (
+            {bookmarksLoading ? (
+              <div className="text-center py-20">
+                <Loader2
+                  className="animate-spin text-indigo-500 mx-auto mb-4"
+                  size={40}
+                />
+                <p className="text-slate-500">Loading bookmarks...</p>
+              </div>
+            ) : bookmarks.length === 0 ? (
               <div className="text-center py-20 bg-slate-900/40 border border-dashed border-white/10 rounded-2xl">
                 <Globe className="mx-auto text-slate-700 mb-4" size={40} />
                 <p className="text-slate-500">Your collection is empty.</p>
@@ -241,33 +341,79 @@ export default function Dashboard() {
                   key={b.id}
                   className="group bg-slate-900 hover:bg-slate-800/80 border border-white/5 p-4 rounded-2xl flex items-center justify-between transition-all"
                 >
-                  <div className="flex items-center gap-4 overflow-hidden">
-                    <div className="h-10 w-10 shrink-0 bg-indigo-500/10 rounded-xl flex items-center justify-center text-indigo-400">
-                      <Globe size={20} />
+                  {editingId === b.id ? (
+                    <div className="flex-1 flex items-center gap-4">
+                      <div className="h-10 w-10 shrink-0 bg-indigo-500/10 rounded-xl flex items-center justify-center text-indigo-400">
+                        <Globe size={20} />
+                      </div>
+                      <div className="flex-1 space-y-2">
+                        <input
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          className="w-full p-2 rounded-lg bg-slate-800 border border-white/5 focus:border-indigo-500 outline-none text-white"
+                          placeholder="Title"
+                        />
+                        <input
+                          value={editUrl}
+                          onChange={(e) => setEditUrl(e.target.value)}
+                          className="w-full p-2 rounded-lg bg-slate-800 border border-white/5 focus:border-indigo-500 outline-none text-white"
+                          placeholder="URL"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => updateBookmark(b.id)}
+                          className="p-2 hover:bg-green-500/10 rounded-lg text-slate-400 hover:text-green-400 transition"
+                        >
+                          <Check size={18} />
+                        </button>
+                        <button
+                          onClick={cancelEdit}
+                          className="p-2 hover:bg-red-500/10 rounded-lg text-slate-400 hover:text-red-400 transition"
+                        >
+                          <X size={18} />
+                        </button>
+                      </div>
                     </div>
-                    <div className="overflow-hidden">
-                      <h3 className="font-semibold text-white truncate">
-                        {b.title}
-                      </h3>
-                      <p className="text-sm text-slate-500 truncate">{b.url}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <a
-                      href={b.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="p-2 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition"
-                    >
-                      <ExternalLink size={18} />
-                    </a>
-                    <button
-                      onClick={() => deleteBookmark(b.id)}
-                      className="p-2 hover:bg-red-500/10 rounded-lg text-slate-400 hover:text-red-400 transition"
-                    >
-                      <Trash2 size={18} />
-                    </button>
-                  </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-4 overflow-hidden">
+                        <div className="h-10 w-10 shrink-0 bg-indigo-500/10 rounded-xl flex items-center justify-center text-indigo-400">
+                          <Globe size={20} />
+                        </div>
+                        <div className="overflow-hidden">
+                          <h3 className="font-semibold text-white truncate">
+                            {b.title}
+                          </h3>
+                          <p className="text-sm text-slate-500 truncate">
+                            {b.url}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <a
+                          href={b.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="p-2 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition"
+                        >
+                          <ExternalLink size={18} />
+                        </a>
+                        <button
+                          onClick={() => startEdit(b)}
+                          className="p-2 hover:bg-blue-500/10 rounded-lg text-slate-400 hover:text-blue-400 transition"
+                        >
+                          <Edit size={18} />
+                        </button>
+                        <button
+                          onClick={() => deleteBookmark(b.id)}
+                          className="p-2 hover:bg-red-500/10 rounded-lg text-slate-400 hover:text-red-400 transition"
+                        >
+                          <Trash2 size={18} />
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               ))
             )}
