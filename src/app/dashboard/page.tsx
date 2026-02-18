@@ -36,66 +36,25 @@ export default function Dashboard() {
   const [editUrl, setEditUrl] = useState("");
   const router = useRouter();
 
-  // useEffect(() => {
-  //   const loadData = async () => {
-  //     const {
-  //       data: { user },
-  //     } = await supabase.auth.getUser();
-
-  //     if (!user) {
-  //       router.replace("/");
-  //       return;
-  //     }
-  //     setUser(user);
-
-  //     // Load from localStorage first for instant UI
-  //     const cached = localStorage.getItem(`bookmarks_${user.id}`);
-  //     if (cached) {
-  //       setBookmarks(JSON.parse(cached));
-  //     }
-
-  //     setBookmarksLoading(true);
-  //     const { data } = await supabase
-  //       .from("bookmarks")
-  //       .select("*")
-  //       .eq("user_id", user.id)
-  //       .order("created_at", { ascending: false });
-
-  //     if (data) {
-  //       setBookmarks(data);
-  //       localStorage.setItem(`bookmarks_${user.id}`, JSON.stringify(data));
-  //     }
-  //     setBookmarksLoading(false);
-  //     setLoading(false);
-  //   };
-
-  //   loadData();
-  // }, [router]);
-
   useEffect(() => {
     const loadData = async () => {
-      // 1️⃣ Get session instead of getUser
       const {
-        data: { session },
-      } = await supabase.auth.getSession();
+        data: { user },
+      } = await supabase.auth.getUser();
 
-      if (!session?.user) {
+      if (!user) {
         router.replace("/");
         return;
       }
-
-      const user = session.user;
       setUser(user);
 
-      // 2️⃣ Load cached bookmarks instantly
+      // Load from localStorage first for instant UI
       const cached = localStorage.getItem(`bookmarks_${user.id}`);
       if (cached) {
         setBookmarks(JSON.parse(cached));
       }
 
       setBookmarksLoading(true);
-
-      // 3️⃣ Fetch fresh data from DB
       const { data } = await supabase
         .from("bookmarks")
         .select("*")
@@ -106,26 +65,67 @@ export default function Dashboard() {
         setBookmarks(data);
         localStorage.setItem(`bookmarks_${user.id}`, JSON.stringify(data));
       }
-
       setBookmarksLoading(false);
       setLoading(false);
     };
 
     loadData();
-
-    // 4️⃣ Listen for auth state changes after OAuth redirect
-    const { data: authListener } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        if (session?.user) {
-          setUser(session.user);
-        }
-      },
-    );
-
-    return () => {
-      authListener.subscription.unsubscribe();
-    };
   }, [router]);
+
+  // useEffect(() => {
+  //   const loadData = async () => {
+  //     // 1️⃣ Get session instead of getUser
+  //     const {
+  //       data: { session },
+  //     } = await supabase.auth.getSession();
+
+  //     if (!session?.user) {
+  //       router.replace("/");
+  //       return;
+  //     }
+
+  //     const user = session.user;
+  //     setUser(user);
+
+  //     // 2️⃣ Load cached bookmarks instantly
+  //     const cached = localStorage.getItem(`bookmarks_${user.id}`);
+  //     if (cached) {
+  //       setBookmarks(JSON.parse(cached));
+  //     }
+
+  //     setBookmarksLoading(true);
+
+  //     // 3️⃣ Fetch fresh data from DB
+  //     const { data } = await supabase
+  //       .from("bookmarks")
+  //       .select("*")
+  //       .eq("user_id", user.id)
+  //       .order("created_at", { ascending: false });
+
+  //     if (data) {
+  //       setBookmarks(data);
+  //       localStorage.setItem(`bookmarks_${user.id}`, JSON.stringify(data));
+  //     }
+
+  //     setBookmarksLoading(false);
+  //     setLoading(false);
+  //   };
+
+  //   loadData();
+
+  //   // 4️⃣ Listen for auth state changes after OAuth redirect
+  //   const { data: authListener } = supabase.auth.onAuthStateChange(
+  //     (_event, session) => {
+  //       if (session?.user) {
+  //         setUser(session.user);
+  //       }
+  //     },
+  //   );
+
+  //   return () => {
+  //     authListener.subscription.unsubscribe();
+  //   };
+  // }, [router]);
 
   
   useEffect(() => {
